@@ -1,22 +1,78 @@
-function hw_capture(varargin)
+function varargout = physio_recorder(varargin)
+% physio_recorder - records physio data from MCC USB device in a
+% scriptable way.  First argument is the command that you want to run. 
+%
+%
+% The easiest way to get started recording data is to just call:
+%
+% cfg = physio_recorder('getconfig');   % gets a default configuration
+% cfg.duration = 180;  % set this to the duration of your run in seconds
+% physio_recorder('setconfig', cfg);    % store configuration
+% physio_recorder('start');
+%
+%
+% 
+%
+%
+%
+%
 
-if ~strcmp('PCWIN', computer)
-    error('Must use 32-bit Windows version of MATLAB.');
+
+% if ~strcmp('PCWIN', computer)
+%     error('Must use 32-bit Windows version of MATLAB.');
+% end;
+if ~exist('analoginput', 'file')
+    error('Must have the MATLAB data acquisition toolbox installed.');
 end;
+
+persistent cfg;
+
+% configure with reasonable defaults
+if isempty(cfg)
+    cfg = get_config;
+end;
+
+
+cmd_str = varargin{1};
+
+if nargin > 1
+    varargin = varargin(2:end);
+end;
+
+switch cmd_str
+    
+    case 'getconfig'
+        varargout{1} = cfg;
+        
+    case 'setconfig'
+        if nargin < 2 || ~isstruct(varargin{1})
+            error('Must pass in valid config struct as argument');
+        end;
+        cfg = varargin{1};
+        
+    otherwise 
+        error('Command ''%s'' not recognized.', cmd_str);
+end;
+
+
+return;
+
+
+% get the current configuration, or reasonable defaults if not set.
+function cfg = get_config()
 
 cfg.SampleRate = 1000;
 cfg.duration = 390;
 cfg.channels = [0, 1, 3];
-% the only vals recognized are 'resp' 'o2 sat' and 'mr trigger', affects
-% plotting and downsampling if chosen
+    % the only vals recognized are 'resp' 'o2 sat' and 'mr trigger', affects
+    % plotting and downsampling if chosen
 cfg.chan_interp = {'resp', 'o2 sat', 'mr trigger'};
 cfg.session_num = 1;
-cfg.trig_immed = 0;  %   = 1 means start collecting data when keyboard is pressed
-%                        = 0 means use the fMRI trigger 
-cfg.downsample = 1;
+cfg.trig_immed = 0;     %   -> 1 means start collecting data when keyboard is pressed
+                        %   -> 0 means use the fMRI trigger 
+cfg.downsample = 1;     % 1 -> downsample, 0 -> don't downsample
 cfg.downsample_factor = 10;
 cfg.spectrum_topfreq = 4;      % when plotting spectrum, what is the highest freq. 
-
 
 if cfg.trig_immed
     cfg.trigger_type = 'immediate';
@@ -26,6 +82,9 @@ else
     cfg.trigger_cond_val = 2;       % (V)olts, this should be the fMRI trigger channel (ADC 3 on USB-1208 device)
     cfg.trigger_chan = 3;           % corresponds to the index of cfg.channels (not the actual device chan num)
 end;
+
+return;
+
 
 
 while true
@@ -86,22 +145,8 @@ while true
             disp('  r -> set (r)un number');
             disp('  s -> plot (s)pectrum');
             disp('  t -> (t)est capture for 10 sec');
-            disp('  l -> (l)ogfile analysis for SIRS');
             % disp('  t -> set (t)rigger mode');
         
-        case 'l'
-            old_pwd = pwd;
-            logfile_dir = 'd:\Tasks\Sysdevelop.03\siRS_2016\paradigm_v1\logs';
-            addpath(logfile_dir);
-            cd(logfile_dir);
-            try
-                analyze_timing_2;
-            catch me
-                % allow analyze_timing to fail w/o crashing curr prog.
-                disp('dropping to keyboard for debug, exception thrown');
-                keyboard;
-            end;
-            cd(old_pwd);
         case 'e'
             disp('Enter a blank line or (q) to escape back to data capture');
             while 1
