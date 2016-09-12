@@ -1,22 +1,23 @@
 function physio_interactive(varargin)
 % physio_interactive - records physio data from MCC USB device in a
-% in a text menu-driven way.   
+% scriptable way.  First argument is the command that you want to run. 
 %
-% just call the function, and press h to see a list of options.
 %
-% typically, recording is as easy as starting, then
-% 't' to test 10 seconds of data,
-% 'd' to set the recording duration in seconds
-% 'b' to start to wait for the scanner trigger (the trigger should start in
-%       60s or else it will timeout)
-% 'p' or 's' to see the timeseries or spectrum.
-% 
+% The easiest way to get started recording data is to just call:
+%
+% cfg = physio_
+
+
+
+
 
 
 % check prereqs
 if ~strcmp('PCWIN', computer)
     error('Must use 32-bit Windows version of MATLAB.');
 end;
+
+if ~exist(
 
 cfg.SampleRate = 1000;
 cfg.duration = 390;
@@ -100,8 +101,22 @@ while true
             disp('  r -> set (r)un number');
             disp('  s -> plot (s)pectrum');
             disp('  t -> (t)est capture for 10 sec');
+            disp('  l -> (l)ogfile analysis for SIRS');
             % disp('  t -> set (t)rigger mode');
         
+        case 'l'
+            old_pwd = pwd;
+            logfile_dir = 'd:\Tasks\Sysdevelop.03\siRS_2016\paradigm_v1\logs';
+            addpath(logfile_dir);
+            cd(logfile_dir);
+            try
+                analyze_timing_2;
+            catch me
+                % allow analyze_timing to fail w/o crashing curr prog.
+                disp('dropping to keyboard for debug, exception thrown');
+                keyboard;
+            end;
+            cd(old_pwd);
         case 'e'
             disp('Enter a blank line or (q) to escape back to data capture');
             while 1
