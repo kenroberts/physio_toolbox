@@ -10,12 +10,26 @@ function varargout = physio_recorder(varargin)
 % physio_recorder('setconfig', cfg);    % store configuration
 % physio_recorder('start');
 %
-%
+% Commands:
 % 
+% physio_recorder('getconfig') - returns struct with current config
+% information, if 'setconfig' has not been called, this will have
+% reasonable defaults
 %
+% physio_recorder('setconfig', cfg) - sets configuration with values in cfg
+% struct
 %
+% physio_recorder('test') - records 10 secs without waiting for trigger,
+% and plots recorded values
 %
+% physio_recorder('start') - starts recording data in the background
 %
+% physio_recorder('stop') - saves recording data, and optionally returns
+% the data, this function MUST be called.  This function will also block
+% until there are enough samples
+%
+% physio_recorder('trigger') - manually trigger acquisition if it is
+% waiting for an fMRI trigger (note: start must have been called)
 
 
 % if ~strcmp('PCWIN', computer)
@@ -50,6 +64,37 @@ switch cmd_str
         end;
         cfg = varargin{1};
         
+    case 'test'
+        cfg2 = cfg;
+        cfg2.trig_immed = 1;
+        cfg2.trigger_type = 'immediate';
+        cfg2.duration = 10;
+        cfg2.save_file = 0;
+        cfg2 = start_capture(cfg2);
+        [data_acq, time_acq] = stop_capture(cfg2);
+
+        % plot data
+        plot_data(cfg2, time_acq, data_acq);
+        subplot(2, 1, 1);
+        plot(time_acq(1:end-1), data_acq(1:end-1, 1));
+        hold on
+        plot(time_acq(1:end-1), data_acq(1:end-1, 2), 'r');
+        subplot(2, 1, 2);
+        plot(time_acq(1:end-1), data_acq(1:end-1, 3));
+        title(sprintf('run %d', cfg.session_num));
+        
+    case 'start'
+        cfg = start_capture(cfg);
+        
+    case 'trigger'
+        do_trigger();
+    case 'status'
+        
+    case 'reset'
+        
+    case 'stop'
+        [data_acq, time_acq] = stop_capture(cfg);
+        
     otherwise 
         error('Command ''%s'' not recognized.', cmd_str);
 end;
@@ -83,222 +128,94 @@ else
     cfg.trigger_chan = 3;           % corresponds to the index of cfg.channels (not the actual device chan num)
 end;
 
+cfg.log_dir = fullfile(getenv('HOMEDRIVE'), getenv('HOMEPATH'), 'MATLAB', 'physio_logs');
+if ~exist(cfg.log_dir, 'dir')
+    cfg.log_dir = uigetdir('', 'Please choose a directory in which to save log files.');
+end;   
+ 
+return;
+
+% start capturing data in background
+function cfg = start_capture(cfg)
+
+global ai;
+    
+ai = analoginput('mcc', 0);
+
+% add channels
+addchannel(ai, cfg.channels);
+
+% set samplerate (may update)
+set(ai, 'SampleRate', cfg.SampleRate);
+sr = get(ai, 'SampleRate');
+if sr ~= cfg.SampleRate
+    fprintf('setting sample rate to %f instead of %f', ...
+        sr, cfg.SampleRate);
+    cfg.SampleRate = sr;
+end;
+
+% set duration
+requiredSamples = floor(sr * cfg.duration);
+set(ai, 'SamplesPerTrigger', requiredSamples);
+
+% grab info
+cfg.dev_info = evalc('disp(ai)');
+
+% log to file
+cfg.logfile = sprintf('run_%02d_%s.mat', cfg.session_num, strrep(datestr(now), ' ', '_'));
+
+% set triggering conditions
+if ~cfg.trig_immed
+    set(ai, 'TriggerType', cfg.trigger_type);
+    set(ai, 'TriggerRepeat', 0);
+    set(ai, 'TriggerCondition', cfg.trigger_cond);
+    set(ai, 'TriggerConditionValue', cfg.trigger_cond_val);
+    set(ai, 'TriggerChannel', ai.channel(cfg.trigger_chan));
+    set(ai, 'TimeOut', inf);             % can change timeout
+end;
+
+disp('Waiting for trigger...');
+
+% start capture
+start(ai);
+return;
+    
+function do_trigger()
+
+global ai;
+
+trigger(ai);
+
 return;
 
 
+function [data_acq, time_acq] = stop_capture(cfg)
+    
+global ai
 
-while true
-    fprintf('Preparing to capture %d ch at %dHz for %d seconds.\n', ...
-        length(cfg.channels), cfg.SampleRate, cfg.duration);
-    fprintf('Enter (h) for help.\n');
-    in_char = input(' -> ', 's');
-    
-    switch in_char
-        case 'b'
-            [data_acq, time_acq] = start_capture(cfg);
-            cfg.session_num = cfg.session_num + 1;
-        
-        case 's'
-            if exist('time_acq', 'var')
-                plot_spectrum(cfg, time_acq, data_acq);
-            else
-                disp('no data to plot');
-            end;
-            
-            
-        case 'p'
-            if exist('time_acq', 'var')
-                subplot(2, 1, 1);
-                plot(time_acq(1:end-1), data_acq(1:end-1, 1));
-                hold on
-                plot(time_acq(1:end-1), data_acq(1:end-1, 2), 'r');
-                subplot(2, 1, 2);
-                plot(time_acq(1:end-1), data_acq(1:end-1, 3));
-                title(sprintf('run %d', cfg.session_num));
-            else
-                disp('no data to plot');
-            end;
-            
-        case 'd'
-            in_char = input('Enter seconds -> ', 's');
-            [dur, conv_ok] = str2num(in_char);
-            if conv_ok && isscalar(dur) && dur > 0 && dur < 1000
-                cfg.duration = dur;
-            end;
-        
-        case 'r'
-            in_char = input('Enter run number -> ', 's');
-            [run, conv_ok] = str2num(in_char);
-            if conv_ok && isscalar(run)
-                cfg.session_num = run;
-                fprintf('Run: %d', run);
-            end;
-            
-        case 'h'
-            disp('List of commands:');
-            disp('  b -> (b)egin capture');
-            disp('  e -> (e)val a matlab command');
-            disp('  d -> set (d)uration');
-            disp('  h -> display (h)elp');
-            disp('  q -> (q)uit');
-            disp('  p -> (p)lot timecourse');
-            disp('  r -> set (r)un number');
-            disp('  s -> plot (s)pectrum');
-            disp('  t -> (t)est capture for 10 sec');
-            % disp('  t -> set (t)rigger mode');
-        
-        case 'e'
-            disp('Enter a blank line or (q) to escape back to data capture');
-            while 1
-                try
-                    curr_cmd = input(' -> ', 's');
-                    if strcmp(curr_cmd, 'q') || numel(curr_cmd) == 0
-                        break;
-                    end;
-                    
-                    out = evalc(curr_cmd);
-                    disp(out);
-                catch me
-                    disp(me);
-                end;
-            end;
-            
-            
-        case '1'
-            tr_ons = find(diff(data_acq(:,3)) > 2.5);
-            %ntr = input('Please choose number of tr''s: ');
-            ntr = 16;
+% blocking function
+[data_acq, time_acq] = getdata(ai);
 
-            trs_to_plot = tr_ons(1:ntr:end);
-            time_plot = mean(diff(time_acq(trs_to_plot)));
-            n_tpoints = round(time_plot/mean(diff(time_acq(1:1000))));
+% teardown input device
+stop(ai);
+delete(ai);
 
-            figure;
-            for i = 1:length(trs_to_plot)
-                ind_range = (1:10:n_tpoints)+trs_to_plot(i);
-                if ind_range(end) > length(time_acq)
-                    continue;
-                end;
+% should we downsample data?
+% 'mr trigger' channel will be converted to rising edge onsets
+% and all other channels downsampled with matlab 'decimate'
+% timebase will be divided by downsample_factor
+if cfg.downsample
+    [cfg, data_acq, time_acq] = data_downsample(cfg, data_acq, time_acq);
+end;
 
+% save data
+% (no spaces or colons in filename)
+if isfield(cfg, 'save_file') && ~cfg.save_file
+    return;
+end;
 
+save(fullfile(cfg.log_dir, cfg.logfile), 'cfg', 'data_acq', 'time_acq');
 
-                sm_data = conv(data_acq(ind_range,1), 0.1*ones(10,1), 'valid');
-                ind_range = ind_range(5:end-5);
-
-                plot(time_acq(ind_range)-time_acq(ind_range(1)), sm_data);
-                hold on;
-            end;
-            hold off;
-            
-        case 'q'
-            break;
-            
-        case 't'
-            % see:
-            % http://www.mathworks.com/help/daq/examples/using-analog-input-triggers.html?prodcode=DA&language=en
-            % things we need for trigger:
-            % mode: immediate, or software
-            cfg2 = cfg;
-            cfg2.trig_immed = 1;
-            cfg2.trigger_type = 'immediate';
-            cfg2.duration = 10;
-            cfg2.save_file = 0;
-            [data_acq, time_acq] = start_capture(cfg2);
-            
-            % plot data
-            subplot(2, 1, 1);
-            plot(time_acq(1:end-1), data_acq(1:end-1, 1));
-            hold on
-            plot(time_acq(1:end-1), data_acq(1:end-1, 2), 'r');
-            subplot(2, 1, 2);
-            plot(time_acq(1:end-1), data_acq(1:end-1, 3));
-            title(sprintf('run %d', cfg.session_num));
-            
-        otherwise
-            fprintf('Do not recognize input "%s".\n\n');
-    end;
-end; % while
-
-% capture
-function [data_acq, time_acq, cfg] = start_capture(cfg)
-    ai = analoginput('mcc', 0);
-    
-    % add channels
-    addchannel(ai, cfg.channels);
-    
-    % set samplerate
-    set(ai, 'SampleRate', cfg.SampleRate);
-    sr = get(ai, 'SampleRate');
-    if sr ~= cfg.SampleRate
-        fprintf('setting sample rate to %f instead of %f', ...
-            sr, cfg.SampleRate);
-        cfg.SampleRate = sr;
-    end;
-    
-    % set duration
-    requiredSamples = floor(sr * cfg.duration);
-    set(ai, 'SamplesPerTrigger', requiredSamples);
-
-    % grab info
-    cfg.dev_info = evalc('disp(ai)');
-    
-    % log to file
-    logfile = sprintf('run_%02d_%s.dat', cfg.session_num, strrep(datestr(now), ' ', '_')); 
-    % set logging mode?
-    
-    % strategy: init output buffer
-    data_ind = 1;
-    data_acq = zeros(requiredSamples, length(cfg.channels));
-    time_acq = zeros(requiredSamples, 1);
-    chunk = 1000;
-    
-  
-    % set triggering conditions
-    if ~cfg.trig_immed
-        set(ai, 'TriggerType', cfg.trigger_type);
-        set(ai, 'TriggerRepeat', 0);
-        set(ai, 'TriggerCondition', cfg.trigger_cond);
-        set(ai, 'TriggerConditionValue', cfg.trigger_cond_val);
-        set(ai, 'TriggerChannel', ai.channel(cfg.trigger_chan));
-        set(ai, 'TimeOut', 60);
-    end;
-    
-    % start capture
-    start(ai);
-    while data_ind < requiredSamples
-        if requiredSamples < data_ind + chunk
-            [data_acq(data_ind:end, :), time_acq(data_ind:end)] = ...
-                getdata(ai, requiredSamples-data_ind+1);
-            data_ind = data_ind+chunk;
-        else
-            [data_acq(data_ind:data_ind+chunk-1, :), time_acq(data_ind:data_ind+chunk-1)] = ...
-                getdata(ai, chunk);
-            data_ind = data_ind+chunk;
-        end;
-        fprintf('Time elapsed: %.2f and remaining %.2f\n', ...
-            data_ind/cfg.SampleRate, (requiredSamples - data_ind)/cfg.SampleRate);
-    end; % data loop
-        
-    % teardown input device
-    stop(ai);
-    delete(ai);
-    
-    % should we downsample data?
-    % 'mr trigger' channel will be converted to rising edge onsets
-    % and all other channels downsampled with matlab 'decimate'
-    % timebase will be divided by downsample_factor
-    if cfg.downsample
-        [cfg, data_acq, time_acq] = data_downsample(cfg, data_acq, time_acq);
-    end;
-    
-    % save data
-    % (no spaces or colons in filename)
-    if isfield(cfg, 'save_file') && ~cfg.save_file
-        return;
-    end;
-    matfile = strrep(strrep(logfile, '.dat', '.mat'), ':', '-');
-    save(matfile, 'cfg', 'data_acq', 'time_acq');
-    
 return;
 
 % downsampling function
@@ -363,6 +280,7 @@ return;
 
 % READ
 % https://www.mathworks.com/help/daq/examples/discover-all-other-devices-using-the-legacy-interface.html?prodcode=DA&language=en
+% http://www.mathworks.com/help/releases/R2015a/daq/acquire-data-1.html
 % https://www.mathworks.com/help/daq/examples/introduction-to-analog-input.html?prodcode=DA&language=en
 %
 % https://www.mathworks.com/products/daq/code-examples.html
